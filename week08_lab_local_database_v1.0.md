@@ -56,7 +56,57 @@
 บันทึกโค้ดที่ Gemini ตอบกลับมาที่ด้านล่าง
 
 ```text
-บันทึกผลลัพธ์ที่นี่
+1. ตาราง FavoriteItems (สินค้าที่ถูกใจ)
+
+import 'package:drift/drift.dart';
+
+class FavoriteItems extends Table {
+  // ใช้ productId จาก API เป็น Primary Key เพื่อป้องกันข้อมูลซ้ำ
+  IntColumn get productId => integer()();
+  TextColumn get title => text()();
+  RealColumn get price => real()();
+  TextColumn get imageUrl => text()();
+
+  // เก็บเวลาที่กดถูกใจ (ใช้ DateTime)
+  DateTimeColumn get favoritedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {productId};
+}
+
+เหตุผลที่เลือกใช้:
+  - productId (IntColumn): อ้างอิงตาม ID ของสินค้าจาก Backend ซึ่งมักเป็นตัวเลข ทำให้ค้นหาและ Join ได้เร็ว
+  - price (RealColumn): ใช้ real (เทียบเท่า double) เพราะราคาสินค้าอาจมีจุดทศนิยม
+  - imageUrl (TextColumn): เก็บ URL เป็น String (หรือ path ของไฟล์ที่ cache ไว้)
+  - favoritedAt (DateTimeColumn): ใช้ .orderBy เรียงตามเวลาได้ง่าย โดยใช้ currentDateAndTime เป็น Default
+
+2. ตาราง DraftListings (ร่างประกาศขายจาก AI)
+
+class DraftListings extends Table {
+  // สร้าง ID ใหม่ให้ทุกร่างประกาศเพื่อแยกแยะแต่ละอัน
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get title => text().withLength(min: 1, max: 100)();
+  TextColumn get category => text()();
+  TextColumn get description => text()();
+
+  // เก็บ path ของรูปในเครื่อง (Local Storage Path)
+  TextColumn get imageLocalPath => text()();
+
+  // เก็บเวลาที่แก้ไขล่าสุด (ใช้สำหรับจัดลำดับร่างประกาศ)
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+เหตุผลที่เลือกใช้:
+  - id (IntColumn + autoIncrement): ใช้เป็น Primary Key ให้แต่ละร่างมี ID ของตัวเองโดยอัตโนมัติ
+  - title, category, description (TextColumn): ข้อมูลตัวอักษรปกติ
+  - imageLocalPath (TextColumn): เก็บ path ของไฟล์รูปในเครื่อง ทำให้เข้าถึงไฟล์ได้ทันทีหลังเปิดแอปใหม่
+  - updatedAt (DateTimeColumn): ใช้จัดลำดับร่างล่าสุด ควร update ค่านี้ทุกครั้งที่แก้ไขข้อมูล
+
+คำแนะนำเพิ่มเติมจาก Gemini:
+  1. ดึงข้อมูลด้วย select(...).orderBy([(t) => OrderingTerm(expression: t.favoritedAt, mode: OrderingMode.desc)])
+  2. ตรวจสอบว่าไฟล์ใน imageLocalPath ยังมีอยู่จริงก่อนแสดงผล (File(path).exists())
+  3. เพิ่มตารางใน Database class แล้วรัน build_runner เพื่อสร้างไฟล์ .g.dart
 ```
 
 
@@ -72,7 +122,31 @@
 > ✅ **Checkpoint 1.1** บันทึกคำตอบจากคำถามด้านบนทั้ง 4 ข้อ พร้อมแนบภาพหน้าจอผลลัพธ์จาก Gemini
 
 ```text
-บันทึกผลลัพธ์ที่นี่
+1. Primary Key: ถูกต้องเพียงบางส่วน
+   - DraftListings ใช้ id => integer().autoIncrement()() ถูกต้องตามบทเรียน
+   - FavoriteItems ไม่มี id แบบ autoIncrement แต่ใช้ productId (id จาก API) เป็น Primary Key
+     ผ่าน primaryKey => {productId} ซึ่งไม่ตรงกับบทเรียนที่ให้ใช้ Auto-increment Integer
+     ข้อเสียคือผูกตารางกับ id ภายนอก ถ้า API เปลี่ยนรูปแบบ id จะกระทบ Primary Key ตรง ๆ
+     จึงแก้เองเป็น id autoIncrement และแยก itemId ออกมาเป็นอีกคอลัมน์
+
+2. ราคาสินค้า: Gemini เลือก RealColumn (double) ตรงกับที่บทเรียนแนะนำ ไม่ต้องแก้
+   เพราะราคามีทศนิยม ถ้าใช้ int จะเสียส่วนทศนิยม ถ้าใช้ text จะเรียงและคำนวณไม่สะดวก
+
+3. เก็บสำเนาหรือเก็บแค่ itemId: Gemini เก็บสำเนา title/price/imageUrl ไว้ในตาราง Favorites
+   (ระบุเหตุผลว่าเพื่อ Offline-first) ถือว่าถูกต้อง
+   ถ้าเก็บแค่ itemId แล้วเรียก API ใหม่ทุกครั้ง เมื่อไม่มีอินเทอร์เน็ตจะดึงข้อมูลสินค้าไม่ได้
+   หน้ารายการโปรดจะว่างหรือ error ทั้งที่ผู้ใช้เคยกดถูกใจไว้แล้ว ขัดกับหลักการ Offline-first (หัวข้อ 8.6)
+
+4. .unique() ที่ itemId: Gemini ไม่ได้ใส่ .unique() แต่กันซ้ำด้วยการตั้ง productId เป็น Primary Key แทน
+   ซึ่งได้ผลเท่ากัน แต่เมื่อแก้ให้ใช้ id autoIncrement ตามข้อ 1 ต้องเพิ่มเองเป็น
+   IntColumn get itemId => integer().unique()();
+   เพราะถ้าไม่มี ผู้ใช้กดหัวใจสินค้าชิ้นเดิมซ้ำได้ไม่จำกัด ตารางจะมีแถวซ้ำสะสมเรื่อย ๆ
+   (เมื่อมี unique ต้องใช้ InsertMode.insertOrIgnore ตอน insert เพื่อไม่ให้เกิด UNIQUE constraint failed)
+
+หมายเหตุ: ชื่อที่ Gemini ตั้ง (productId, favoritedAt, DraftListings, imageLocalPath) ต่างจาก Schema ในใบงานส่วนที่ 2
+(itemId, addedAt, ListingDrafts, imagePath) ส่วนถัดไปจะใช้ชื่อตามใบงาน
+
+[ภาพหน้าจอผลลัพธ์จาก Gemini: ต้องถ่ายและแนบเอง]
 ```
 
 ---
@@ -172,7 +246,20 @@ dart run build_runner build --delete-conflicting-outputs
 capture หน้าจอผลลัพธ์คำสั่ง `dart run build_runner build` จากขั้นตอนที่ 3.2 ที่แสดงว่าสร้างไฟล์สำเร็จ (ไม่มี Error เรื่อง Class ชื่อซ้ำ) จากนั้นเปิดไฟล์ main.dart ที่แก้ตามขั้นตอนที่ 3.3 โดย ยังไม่ต้องรันแอปในจุดนี้ เพราะ VS Code จะขีดเส้นสีแดงใต้ FavoritesRepositoryDrift และ ListingDraftRepositoryDrift (ยังไม่มี Class จริง จะเขียน Class นี้ในส่วนที่ 4-5) และถ้าสั่งรันตอนนี้แอปจะ Error ทันทีเพราะคอมไพล์ไม่ผ่าน ถือเป็นเรื่องปกติ — จะกลับมารันแอปได้จริงอีกครั้งหลังทำ Checkpoint 4.1 และ 5.1 เสร็จ
 
 ```text
-บันทึกผลลัพธ์ที่นี่
+ผลคำสั่ง: dart run build_runner build --delete-conflicting-outputs
+  Built with build_runner/aot in 90s; wrote 40 outputs.
+  (มี warning ว่า --delete-conflicting-outputs ถูกถอดออกจาก build_runner เวอร์ชันใหม่และถูกข้าม ไม่กระทบผล)
+
+ตรวจไฟล์ lib/database/app_database.g.dart ถูกสร้างขึ้น คลาสที่ Generate ได้:
+  FavoriteItem, FavoriteItemsCompanion, ListingDraftRow, ListingDraftsCompanion
+  -> ไม่มีคลาสชื่อ ListingDraft ซ้ำกับของเดิมจากสัปดาห์ที่ 7 เพราะใส่ @DataClassName('ListingDraftRow') แล้ว
+
+main.dart: สร้าง AppDatabase() ครั้งเดียว ส่งผ่าน MyApp(db: db) ไปยัง MainScaffold 3 พารามิเตอร์
+  (itemRepository, favoritesRepository, draftRepository)
+dart analyze มี error เฉพาะที่คาดไว้ คือยังไม่มีไฟล์ FavoritesRepositoryDrift / ListingDraftRepositoryDrift
+และ MainScaffold ยังใช้พารามิเตอร์ชื่อเดิม (จะแก้ในส่วนที่ 4-5)
+
+[ภาพหน้าจอ: ต้องถ่ายจากเทอร์มินัลและไฟล์ main.dart ของตนเองแล้วแนบ]
 ```
 
 ---
